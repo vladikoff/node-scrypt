@@ -40,10 +40,16 @@ extern "C" {
 }
 
 using namespace v8;
+using namespace node;
 
 const size_t maxmem_default = 0;
 const double maxmemfrac_default = 0.5;
+const uint64_t N_default = 66560;
+const uint32_t r_default = 8;
+const uint32_t p_default = 1;
+const double len_default = 32;
 
+using namespace std;
 //Asynchronous work request data
 struct Baton {
     //Asynch callback function
@@ -53,10 +59,15 @@ struct Baton {
     int result;
     std::string message;
     std::string password;
+    std::string salt;
     std::string output;
     size_t maxmem;
     double maxmemfrac;
     double maxtime;
+    double N;
+    double r;
+    double p;
+    double len;
     size_t outbuflen;
 };
 
@@ -163,6 +174,115 @@ int ValidateCryptoArguments(const Arguments& args, std::string& message, size_t&
     return 0;
 }
 
+/*
+ * Validates JavaScript function arguments for password hash and sets salt, N, r, p, len
+ */
+int ValidateCustomOptionsHashArguments(const Arguments& args, std::string& message, uint64_t& N, uint32_t& r, uint32_t& p, double& len) {
+    uint32_t callbackPosition = 0;
+
+    if (args.Length() < 3) {
+       message = "Wrong number of arguments: At least three arguments are needed - password, salt and a callback function";
+       return 0;
+    }
+
+    for (int i=0; i < args.Length(); i++) {
+       if (args[i]->IsFunction()) {
+           callbackPosition = i;
+
+           if (i < 2) {
+               message = "arguments missing before callback. make sure at least password and salt have been set before callback";
+               return 0;
+           }
+
+           //Success
+           return callbackPosition;
+       }
+
+       switch(i) {
+           case 0:
+               //Check password is a string
+               if (!args[i]->IsString()) {
+                   message = "password must be a string";
+                   return 0;
+               }
+
+               if (args[i]->ToString()->Length() == 0) {
+                   message = "password cannot be empty";
+                   return 0;
+               }
+
+               break;
+          case 1:
+              //Check salt is a string
+              if (!args[i]->IsString()) {
+                  message = "salt must be a string";
+                  return 0;
+              }
+
+              if (args[i]->ToString()->Length() == 0) {
+                  message = "salt cannot be empty";
+                  return 0;
+              }
+
+              break;
+
+          case 2:
+              //Set N if possible, else set it to default
+              if (args[i]->IsNumber()) {
+                 int nArg = Local<Number>(args[i]->ToNumber())->Value();
+
+                 if (nArg < 0)
+                     N = N_default;
+                 else
+                     N = (size_t)nArg;
+              }
+              break;
+
+          case 3:
+              //Set r if possible, else set it to default
+              if (args[i]->IsNumber()) {
+                 int rArg = Local<Number>(args[i]->ToNumber())->Value();
+
+                 if (rArg < 0)
+                     r = r_default;
+                 else
+                     r = (size_t)rArg;
+              }
+              break;
+
+          case 4:
+              //Set p if possible, else set it to default
+              if (args[i]->IsNumber()) {
+                 int pArg = Local<Number>(args[i]->ToNumber())->Value();
+
+                 if (pArg < 0)
+                     p = p_default;
+                 else
+                     p = (size_t)pArg;
+              }
+              break;
+
+          case 5:
+              //Set len if possible, else set it to default
+              if (args[i]->IsNumber()) {
+                 int lenArg = Local<Number>(args[i]->ToNumber())->Value();
+
+                 if (lenArg < 0)
+                     len = len_default;
+                 else
+                     len = (size_t)lenArg;
+              }
+              break;
+       }
+    }
+
+    if (!callbackPosition) {
+       message = "callback function not present";
+       return 0;
+    }
+
+    return 0;
+}
 
 /*
  * Validates JavaScript function arguments for password hash and sets maxmem, maxmemfrac and maxtime
@@ -333,7 +453,7 @@ Handle<Value> HashAsyncBefore(const Arguments& args) {
         );
         return scope.Close(Undefined());
     }
-    
+
     //Arguments from JavaScript land
     String::Utf8Value password(args[0]->ToString());
     Local<Function> callback = Local<Function>::Cast(args[callbackPosition]);
@@ -358,12 +478,65 @@ Handle<Value> HashAsyncBefore(const Arguments& args) {
 }
 
 /*
+ * Password Hash with Custom Options: Asynchronous function called from JavaScript land. Creates work request
+ *                object and schedules it for execution
+ */
+Handle<Value> HashAsyncOptionsBefore(const Arguments& args) {
+    HandleScope scope;
+    //password, salt, N, r, p, len
+    uint64_t N = N_default;
+    uint32_t r = r_default;
+    uint32_t p = p_default;
+    double len = len_default;
+    //size_t maxmem = maxmem_default;
+    //double maxmemfrac = maxmemfrac_default;
+    //double maxtime = 0.0;
+    std::string validateMessage;
+    uint32_t callbackPosition;
+
+    //Validate arguments
+    if (!(callbackPosition = ValidateCustomOptionsHashArguments(args, validateMessage, N, r, p, len))) {
+        ThrowException(
+            Exception::TypeError(String::New(validateMessage.c_str()))
+        );
+        return scope.Close(Undefined());
+    }
+
+    //Arguments from JavaScript land
+    String::Utf8Value password(args[0]->ToString());
+    String::Utf8Value salt(args[1]->ToString());
+    Local<Function> callback = Local<Function>::Cast(args[callbackPosition]);
+
+
+
+    //Asynchronous call baton that holds data passed to async function
+    Baton* baton = new Baton();
+    baton->password = *password;
+    baton->salt = *salt;
+    baton->N = N;
+    baton->r = r;
+    baton->p = p;
+    baton->len = len;
+    baton->callback = Persistent<Function>::New(callback);
+
+    //Asynchronous work request
+    uv_work_t *req = new uv_work_t();
+    req->data = baton;
+
+    //Schedule work request
+    int status = uv_queue_work(uv_default_loop(), req, HashWorkOptions, (uv_after_work_cb)HashAsyncAfter);
+    assert(status == 0);
+
+    return scope.Close(Undefined());
+}
+
+/*
  * Password Hash: Scrypt key derivation performed here
  */
 void HashWork(uv_work_t* req) {
     Baton* baton = static_cast<Baton*>(req->data);
     uint8_t outbuf[96]; //Header size for password derivation is fixed
-    
+
     //perform scrypt password hash
     baton->result = HashPassword(
         (const uint8_t*)baton->password.c_str(),
@@ -376,6 +549,33 @@ void HashWork(uv_work_t* req) {
     char base64Encode[base64EncodedLength + 1];
     base64_encode(outbuf, 96, base64Encode);
     baton->output = base64Encode;
+}
+
+/*
+ * Password Hash with Custom Options: Scrypt key derivation performed here
+ */
+void HashWorkOptions(uv_work_t* req) {
+    Baton* baton = static_cast<Baton*>(req->data);
+    uint8_t outbuf[96]; //Header size for password derivation is fixed
+
+    //perform scrypt password hash
+    baton->result = HashPasswordOptions(
+        (const uint8_t*)baton->password.c_str(),
+        outbuf,
+        (const uint8_t*)baton->salt.c_str(),
+        baton->N,
+        baton->r,
+        baton->p,
+        baton->len
+    );
+
+    //Base64 encode for storage
+    //int base64EncodedLength = calcBase64EncodedLength(96);
+    //char base64Encode[base64EncodedLength + 1];
+    //base64_encode(outbuf, 96, base64Encode);
+    std::string s( outbuf, outbuf+96 );
+
+    baton->output = s;
 }
 
 /*

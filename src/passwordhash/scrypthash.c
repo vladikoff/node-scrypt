@@ -36,6 +36,7 @@
 #include <unistd.h>
 #include <stdint.h>
 #include <string.h>
+#include <stdio.h>
 
 /*
  * Given maxmem, maxmemfrac and maxtime, this functions calculates the N,r,p variables. 
@@ -144,6 +145,24 @@ err0:
 }
 
 /*
+ * Creates a password hash with custom options. This is the actual key derivation function
+ */
+int
+HashPasswordOptions(const uint8_t* passwd, uint8_t header[96], const uint8_t* salt, uint64_t* N2, uint32_t* r2, uint32_t* p2, double len) {
+   //int logN=0;
+
+      /* Generate the derived keys. */
+      const uint64_t N = 64 * 1024;
+      const uint32_t r = 8;
+      const uint32_t p = 1;
+
+      if (crypto_scrypt(passwd, (size_t)strlen((char *)passwd), salt, (size_t)strlen((char *)salt), N, r, p, header, 96))
+          return (3);
+
+      return 0; //success
+}
+
+/*
  * Creates a password hash. This is the actual key derivation function
  */
 int
@@ -194,45 +213,4 @@ HashPassword(const uint8_t* passwd, uint8_t header[96], size_t maxmem, double ma
     memcpy(&header[64], hbuf, 32);
 
     return 0; //success
-}
-
-/*
- * Verifies password hash (also ensures hash integrity at same time)
- */
-int
-VerifyHash(const uint8_t header[96], const uint8_t* passwd) {
-    int N=0;
-    uint32_t r=0, p=0; 
-    uint8_t dk[64],
-            salt[32],
-            hbuf[32];
-    uint8_t * key_hmac = &dk[32];
-    HMAC_SHA256_CTX hctx;
-    SHA256_CTX ctx;
-
-    /* Parse N, r, p, salt. */
-    N = (uint64_t)1 << header[7]; //Remember, header[7] is actually LogN
-    r = be32dec(&header[8]);
-    p = be32dec(&header[12]);
-    memcpy(salt, &header[16], 32);
-
-    /* Verify header checksum. */
-    SHA256_Init(&ctx);
-    scrypt_SHA256_Update(&ctx, header, 48);
-    scrypt_SHA256_Final(hbuf, &ctx);
-    if (memcmp(&header[48], hbuf, 16))
-            return (7);
-
-    /* Compute Derived Key */
-    if (crypto_scrypt(passwd, (size_t)strlen((char *)passwd), salt, 32, N, r, p, dk, 64))
-        return (3);
-
-    /* Check header signature (i.e., verify password). */
-    HMAC_SHA256_Init(&hctx, key_hmac, 32);
-    HMAC_SHA256_Update(&hctx, header, 64);
-    HMAC_SHA256_Final(hbuf, &hctx);
-    if (memcmp(hbuf, &header[64], 32))
-        return (11);        
-
-    return (0); //Success
 }

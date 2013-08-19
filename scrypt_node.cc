@@ -38,6 +38,9 @@ using namespace v8;
  */
 void RegisterModule(Handle<Object> target) {
     //Asynchronous
+    target->Set(String::NewSymbol("passwordHashWithCustomOptions"),
+        FunctionTemplate::New(HashAsyncOptionsBefore)->GetFunction());
+
     target->Set(String::NewSymbol("passwordHash"),
         FunctionTemplate::New(HashAsyncBefore)->GetFunction());
 

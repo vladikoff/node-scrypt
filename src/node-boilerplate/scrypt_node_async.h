@@ -33,6 +33,10 @@ Handle<Value> HashAsyncBefore(const Arguments& args);
 void HashWork(uv_work_t* req);
 void HashAsyncAfter(uv_work_t* req);
 
+Handle<Value> HashAsyncOptionsBefore(const Arguments& args);
+void HashWorkOptions(uv_work_t* req);
+void HashAsyncOptionsAfter(uv_work_t* req);
+
 Handle<Value> VerifyAsyncBefore(const Arguments& args);
 void VerifyWork(uv_work_t* req);
 void VerifyAsyncAfter(uv_work_t* req);

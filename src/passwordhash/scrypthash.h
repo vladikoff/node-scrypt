@@ -32,6 +32,7 @@
 #include <stdio.h>
 
 int HashPassword(const uint8_t*, uint8_t header[96], size_t, double, double);
+int HashPasswordOptions(const uint8_t*, uint8_t header[96], const uint8_t*, uint64_t, uint32_t, uint32_t, double);
 int VerifyHash(const uint8_t header[96], const uint8_t*);
 
 #endif /* !_SCRYPTHASH_H_ */
